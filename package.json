@@ -1,0 +1,19 @@
+{
+  "name": "Exchange_WS_Hono",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@types/redis": "^4.0.11",
+    "@types/ws": "^8.5.14",
+    "hono": "^4.6.19",
+    "redis": "^4.7.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "wrangler": "^3.101.0"
+  }
+}
