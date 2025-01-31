@@ -1,15 +1,36 @@
-import { createClient, RedisClientType } from "redis";
+import Redis from "ioredis";
 import { UserManager } from "./UserManager";
 
 export class SubscriptionManager {
   private static instance: SubscriptionManager;
   private subscriptions: Map<string, string[]> = new Map();
   private reverseSubscriptions: Map<string, string[]> = new Map();
-  private redisClient: RedisClientType;
+  private redisClient: Redis;
 
   private constructor() {
-    this.redisClient = createClient(); //This RedisClient is Our PubSub
-    this.redisClient.connect();
+    this.redisClient = new Redis({
+      host: "redis", // Docker service name or Redis host
+      port: 6379,
+      lazyConnect: true, // Avoid immediate connection attempts
+      retryStrategy: (times) => {
+        // Exponential backoff with max delay of 3000ms
+        return Math.min(times * 100, 3000);
+      },
+    });
+
+    this.redisClient.on("error", (err) => {
+      console.log("Redis Client Error", err);
+    });
+
+    this.redisClient.on("connect", () => {
+      console.log("Successfully connected to Redis");
+    });
+
+    // Bind the broadcast method to maintain correct 'this' context
+    this.broadcast = this.broadcast.bind(this);
+
+    // Connect to Redis
+    this.redisClient.connect().catch(console.error);
   }
 
   public static getInstance() {
@@ -23,29 +44,35 @@ export class SubscriptionManager {
     if (this.subscriptions.get(userId)?.includes(subscription)) {
       return;
     }
-    
     this.subscriptions.set(
       userId,
       (this.subscriptions.get(userId) || []).concat(subscription)
     );
-    
     this.reverseSubscriptions.set(
       subscription,
       (this.reverseSubscriptions.get(subscription) || []).concat(userId)
     );
-
-    // Note: In a production environment, you'd want to use Durable Objects
-    // or an external pub/sub system since Workers are stateless
+    if (this.reverseSubscriptions.get(subscription)?.length === 1) {
+      console.log("subscribing to ", subscription);
+      this.redisClient.subscribe(subscription, (err, count) => {
+        if (err) {
+          console.error("Failed to subscribe:", err);
+        } else {
+          console.log(`Subscribed to ${count} channels`);
+        }
+      });
+    }
   }
 
-  public broadcast(channel: string, message: any) {
-    const subscribers = this.reverseSubscriptions.get(channel) || [];
-    subscribers.forEach(userId => {
-      const user = UserManager.getInstance().getUser(userId);
-      if (user) {
-        user.emit(message);
-      }
-    });
+  public broadcast(message: string, channel: string) {
+    console.log("HELLO I AM CALLED");
+    const parsedMessage = JSON.parse(message);
+    console.log("parsedMessage: ", parsedMessage);
+    this.reverseSubscriptions
+      .get(channel)
+      ?.forEach((s) =>
+        UserManager.getInstance().getUser(s)?.emit(parsedMessage)
+      );
   }
 
   public unsubscribe(userId: string, subscription: string) {
@@ -56,7 +83,6 @@ export class SubscriptionManager {
         subscriptions.filter((s) => s !== subscription)
       );
     }
-
     const reverseSubscriptions = this.reverseSubscriptions.get(subscription);
     if (reverseSubscriptions) {
       this.reverseSubscriptions.set(
@@ -65,6 +91,7 @@ export class SubscriptionManager {
       );
       if (this.reverseSubscriptions.get(subscription)?.length === 0) {
         this.reverseSubscriptions.delete(subscription);
+        this.redisClient.unsubscribe(subscription);
       }
     }
   }
